@@ -73,6 +73,7 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 
@@ -3926,12 +3927,25 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
     }
 }
 
+// [Bitweb] CheckProofOfWorkCached() -- the HeaderPoWCache-backed choke
+// point used below by CheckBlockHeader(), CHeaderPoWCheck::operator(), and
+// HasValidProofOfWork()'s small-batch path -- now lives in pow.h/pow.cpp
+// (declared next to the plain CheckProofOfWork()), not here. It needs to be
+// a shared primitive: node/blockstorage.cpp's ReadBlock() also calls it on
+// every disk read, and it was previously unreachable from there because it
+// sat in this file's anonymous namespace (internal linkage), not because of
+// any real circular-dependency: blockstorage.cpp already includes both
+// pow.h and validation.h. See pow.cpp for the class and the full safety
+// argument (positive-only, keyed on GetHash(), miss-safe fallback).
+
 /* Bitweb Params */
 static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
-    // Check proof of work matches claimed amount
-    if (fCheckPOW && !CheckProofOfWork(block.GetArgon2idPoWHash(), block.nBits, consensusParams))
+    // Check proof of work matches claimed amount.
+    // [Dpowcoin] Cached via CheckProofOfWorkCached() -- see its doc above.
+    if (fCheckPOW && !CheckProofOfWorkCached(block, consensusParams)) {
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "high-hash", "proof of work failed");
+    }
 
     return true;
 }
@@ -4122,10 +4136,92 @@ void ChainstateManager::GenerateCoinbaseCommitment(CBlock& block, const CBlockIn
 }
 
 /* Bitweb Params */
+namespace {
+/**
+ * Argon2id proof-of-work check for a single header, run through
+ * CCheckQueue so a batch of headers can be verified across several worker
+ * threads at once. Each header's PoW is independent of every other header
+ * in the batch -- only the hash computation itself is parallelized here;
+ * link continuity and chainwork accounting still happen afterwards,
+ * sequentially, in the original order, exactly as before.
+ *
+ * [Dpowcoin] Verification goes through CheckProofOfWorkCached() (declared
+ * earlier in this file, just above CheckBlockHeader()), which makes the
+ * cache bidirectional across header-sync phases: a header verified during
+ * PRESYNC's anti-DoS pass is already cached when the same header (same
+ * hash, same content) is re-sent from scratch for REDOWNLOAD, so
+ * REDOWNLOAD hits the cache instead of recomputing Argon2id. The
+ * sequential re-checks in CheckBlockHeader() benefit the same way.
+ */
+class CHeaderPoWCheck
+{
+private:
+    const CBlockHeader* m_header;
+    const Consensus::Params* m_params;
+
+public:
+    CHeaderPoWCheck(const CBlockHeader& header, const Consensus::Params& params)
+        : m_header(&header), m_params(&params) {}
+
+    std::optional<bool> operator()() const
+    {
+        // value is unused on failure; presence alone signals failure.
+        if (!CheckProofOfWorkCached(*m_header, *m_params)) {
+            return false;
+        }
+        return std::nullopt;
+    }
+};
+
+//! Worker threads dedicated to verifying header PoW in parallel. Kept
+//! small and independent of hardware_concurrency(): Argon2id is
+//! memory-hard, so gains past a handful of threads are eaten by memory
+//! bandwidth contention, and this queue competes for CPU with
+//! m_script_check_queue and the rest of the node.
+constexpr unsigned int MAX_HEADER_POW_CHECK_THREADS{4};
+
+//! Below this many headers, queue dispatch overhead isn't worth it.
+constexpr size_t HEADER_POW_PARALLEL_THRESHOLD{8};
+
+CCheckQueue<CHeaderPoWCheck>& GetHeaderPoWCheckQueue()
+{
+    // Constructed once, lazily, on first use, and lives for the rest of
+    // the process. Initialization of function-local statics is
+    // thread-safe since C++11, so no extra locking is needed here.
+    //
+    // total_participants is how many threads -- including the calling
+    // (master) thread itself, which always helps out via
+    // CCheckQueueControl::Complete(), same convention as -par's
+    // worker_threads_num -- will be hashing concurrently for one batch.
+    // One core is left free for the rest of the node whenever more than
+    // one core is available, so this never starves the system on small
+    // boxes (e.g. a Raspberry Pi).
+    const int cores{static_cast<int>(std::thread::hardware_concurrency())};
+    const int total_participants{std::clamp(cores > 1 ? cores - 1 : cores, 1, static_cast<int>(MAX_HEADER_POW_CHECK_THREADS))};
+    static CCheckQueue<CHeaderPoWCheck> queue{/*batch_size=*/64, total_participants - 1};
+    return queue;
+}
+} // namespace
+
 bool HasValidProofOfWork(std::span<const CBlockHeader> headers, const Consensus::Params& consensusParams)
 {
-    return std::ranges::all_of(headers,
-                               [&](const auto& header) { return CheckProofOfWork(header.GetArgon2idPoWHash(), header.nBits, consensusParams); });
+    // [Dpowcoin] Below the parallel-dispatch threshold, checked sequentially
+    // through the same CheckProofOfWorkCached() choke point CHeaderPoWCheck
+    // uses -- so this path stays behaviorally identical to the queued one.
+    if (headers.size() < HEADER_POW_PARALLEL_THRESHOLD) {
+        return std::ranges::all_of(headers, [&](const auto& header) {
+            return CheckProofOfWorkCached(header, consensusParams);
+        });
+    }
+
+    CCheckQueueControl<CHeaderPoWCheck> control(GetHeaderPoWCheckQueue());
+    std::vector<CHeaderPoWCheck> checks;
+    checks.reserve(headers.size());
+    for (const auto& header : headers) {
+        checks.emplace_back(header, consensusParams);
+    }
+    control.Add(std::move(checks));
+    return !control.Complete().has_value();
 }
 /* Bitweb Params */
 

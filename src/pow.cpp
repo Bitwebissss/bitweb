@@ -7,9 +7,13 @@
 
 #include <arith_uint256.h>
 #include <chain.h>
+#include <cuckoocache.h>
 #include <primitives/block.h>
 #include <uint256.h>
 #include <util/check.h>
+#include <util/hasher.h>
+
+#include <shared_mutex>
 
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
@@ -260,6 +264,74 @@ bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&
 {
     if (EnableFuzzDeterminism()) return (hash.data()[31] & 0x80) == 0;
     return CheckProofOfWorkImpl(hash, nBits, params);
+}
+
+namespace {
+/**
+ * [Dpowcoin] Header PoW result cache backing CheckProofOfWorkCached() (see
+ * the doc comment on its declaration in pow.h for the full safety
+ * argument). Kept as an implementation detail of this translation unit --
+ * only the CheckProofOfWorkCached() choke point is exposed externally via
+ * pow.h, so every caller (validation.cpp's header-sync batch check and
+ * CheckBlockHeader(), node/blockstorage.cpp's ReadBlock(), and any future
+ * caller) shares this one instance without being able to poke at it
+ * directly.
+ */
+class HeaderPoWCache
+{
+private:
+    typedef CuckooCache::cache<uint256, SignatureCacheHasher> map_type;
+    mutable map_type m_cache;
+    mutable std::shared_mutex m_mutex;
+
+public:
+    HeaderPoWCache()
+    {
+        // [Dpowcoin] Sized for ~2.1M headers (2,097,152 = 2^21 entries,
+        // exactly 64 MiB at sizeof(uint256)=32 bytes/entry). At a 5-minute
+        // block spacing this covers roughly 20 years of chain height
+        // before a fresh-IBD node's header-validation cache writes would
+        // start getting evicted ahead of the corresponding block-body
+        // downloads catching up. Current chain height is ~220k, so this
+        // is a deliberately generous, hardcoded constant rather than a
+        // config option for now -- revisit as a -args-tunable parameter
+        // (mirroring SignatureCache's -maxsigcachesize pattern) if/when
+        // that becomes worth the complexity. 64 MiB is negligible next to
+        // typical -dbcache budgets.
+        m_cache.setup_bytes(1 << 26); // 64 MiB == 2,097,152 entries
+    }
+
+    bool Get(const uint256& hash) const
+    {
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_cache.contains(hash, /*erase=*/false);
+    }
+
+    void Set(const uint256& hash)
+    {
+        std::unique_lock<std::shared_mutex> lock(m_mutex);
+        m_cache.insert(hash);
+    }
+};
+
+HeaderPoWCache& GetHeaderPoWCache()
+{
+    static HeaderPoWCache cache;
+    return cache;
+}
+} // namespace
+
+bool CheckProofOfWorkCached(const CBlockHeader& header, const Consensus::Params& params)
+{
+    const uint256 hash{header.GetHash()};
+    if (GetHeaderPoWCache().Get(hash)) {
+        return true;
+    }
+    if (!CheckProofOfWork(header.GetArgon2idPoWHash(), header.nBits, params)) {
+        return false;
+    }
+    GetHeaderPoWCache().Set(hash);
+    return true;
 }
 
 std::optional<arith_uint256> DeriveTarget(unsigned int nBits, const uint256 pow_limit)
