@@ -60,7 +60,7 @@ def main():
     if is_ci:
         if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
             extra_env = ["--env", "LINT_CI_IS_PR=1"]
-        elif os.environ.get("GITHUB_REPOSITORY") == "bitweb-project/bitweb":
+        elif os.environ.get("GITHUB_REPOSITORY") == "Bitwebissss/bitweb":
             extra_env = ["--env", "LINT_CI_SANITY_CHECK_COMMIT_SIG=1"]
 
     run(
