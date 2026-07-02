@@ -37,39 +37,6 @@ bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&
 bool CheckProofOfWorkImpl(uint256 hash, unsigned int nBits, const Consensus::Params&);
 
 /**
- * [Bitweb] Cached variant of CheckProofOfWork() for a full header
- * (CBlockHeader, or CBlock via inheritance). Argon2id is memory-hard and
- * expensive relative to upstream's SHA256d, and the same header's PoW is
- * legitimately re-checked at several independent points in the codebase
- * (headers-sync batch check, CheckBlockHeader() on header acceptance and
- * again on block acceptance, and disk re-reads in BlockManager::ReadBlock).
- * This lets every one of those call sites share one process-lifetime,
- * positive-only result cache instead of each re-hashing from scratch.
- *
- * Safety argument (see pow.cpp for the cache implementation):
- * - Positive-only: a failed check is never cached, so a cache hit can only
- *   ever mean "this exact header content already passed
- *   CheckProofOfWork(GetArgon2idPoWHash(), ...) at least once, at some
- *   point in this process's lifetime". A miss always falls back to a full,
- *   honest recompute -- behavior on miss is identical to having no cache,
- *   so this can only remove redundant work, never weaken validation.
- * - Keyed on header.GetHash() (cheap SHA256d), not on the Argon2id result,
- *   so even computing the cache key never requires the expensive hash.
- * - Deliberately process-global and not tied to any peer/session/sync
- *   phase -- once a header is verified once, from anywhere, every other
- *   call site benefits, including a PRESYNC that had to restart with a
- *   different peer, or a disk re-read years later.
- *
- * @param[in] header Header (or block, via CBlockHeader base) to verify;
- *                    keyed by header.GetHash().
- * @param[in] params Consensus params to check the PoW against.
- * @return true if PoW is valid (cache hit, or freshly verified and now
- *         cached); false if verification failed. A false result is never
- *         cached, so a failed check here is always a full, honest check.
- */
-bool CheckProofOfWorkCached(const CBlockHeader& header, const Consensus::Params& params);
-
-/**
  * Return false if the proof-of-work requirement specified by new_nbits at a
  * given height is not possible, given the proof-of-work on the prior block as
  * specified by old_nbits.

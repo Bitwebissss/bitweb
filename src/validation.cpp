@@ -37,6 +37,7 @@
 #include <policy/settings.h>
 #include <policy/truc_policy.h>
 #include <pow.h>
+#include <pow_cache.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
@@ -3929,14 +3930,13 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
 
 // [Bitweb] CheckProofOfWorkCached() -- the HeaderPoWCache-backed choke
 // point used below by CheckBlockHeader(), CHeaderPoWCheck::operator(), and
-// HasValidProofOfWork()'s small-batch path -- now lives in pow.h/pow.cpp
-// (declared next to the plain CheckProofOfWork()), not here. It needs to be
-// a shared primitive: node/blockstorage.cpp's ReadBlock() also calls it on
-// every disk read, and it was previously unreachable from there because it
-// sat in this file's anonymous namespace (internal linkage), not because of
-// any real circular-dependency: blockstorage.cpp already includes both
-// pow.h and validation.h. See pow.cpp for the class and the full safety
-// argument (positive-only, keyed on GetHash(), miss-safe fallback).
+// HasValidProofOfWork()'s small-batch path -- lives in pow_cache.h/.cpp,
+// a standalone module with no knowledge of CBlockHeader beyond a forward
+// declaration; it depends on pow.h (for the plain CheckProofOfWork()), not
+// the other way around. It's a shared primitive: node/blockstorage.cpp's
+// ReadBlock() also calls it on every disk read. See pow_cache.h for the
+// full safety argument (positive-only, keyed on GetHash(), miss-safe
+// fallback) and pow_cache.cpp for the HeaderPoWCache class + singleton.
 
 /* Bitweb Params */
 static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
