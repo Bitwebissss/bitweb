@@ -4136,54 +4136,20 @@ void ChainstateManager::GenerateCoinbaseCommitment(CBlock& block, const CBlockIn
 }
 
 /* Bitweb Params */
-namespace {
-/**
- * Argon2id proof-of-work check for a single header, run through
- * CCheckQueue so a batch of headers can be verified across several worker
- * threads at once. Each header's PoW is independent of every other header
- * in the batch -- only the hash computation itself is parallelized here;
- * link continuity and chainwork accounting still happen afterwards,
- * sequentially, in the original order, exactly as before.
- *
- * [Dpowcoin] Verification goes through CheckProofOfWorkCached() (declared
- * earlier in this file, just above CheckBlockHeader()), which makes the
- * cache bidirectional across header-sync phases: a header verified during
- * PRESYNC's anti-DoS pass is already cached when the same header (same
- * hash, same content) is re-sent from scratch for REDOWNLOAD, so
- * REDOWNLOAD hits the cache instead of recomputing Argon2id. The
- * sequential re-checks in CheckBlockHeader() benefit the same way.
- */
-class CHeaderPoWCheck
+std::optional<bool> CHeaderPoWCheck::operator()() const
 {
-private:
-    const CBlockHeader* m_header;
-    const Consensus::Params* m_params;
-
-public:
-    CHeaderPoWCheck(const CBlockHeader& header, const Consensus::Params& params)
-        : m_header(&header), m_params(&params) {}
-
-    std::optional<bool> operator()() const
-    {
-        // value is unused on failure; presence alone signals failure.
-        if (!CheckProofOfWorkCached(*m_header, *m_params)) {
-            return false;
-        }
-        return std::nullopt;
+    // value is unused on failure; presence alone signals failure.
+    if (!CheckProofOfWorkCached(*m_header, *m_params)) {
+        return false;
     }
-};
+    return std::nullopt;
+}
 
-//! Worker threads dedicated to verifying header PoW in parallel. Kept
-//! small and independent of hardware_concurrency(): Argon2id is
-//! memory-hard, so gains past a handful of threads are eaten by memory
-//! bandwidth contention, and this queue competes for CPU with
-//! m_script_check_queue and the rest of the node.
-constexpr unsigned int MAX_HEADER_POW_CHECK_THREADS{4};
-
-//! Below this many headers, queue dispatch overhead isn't worth it.
-constexpr size_t HEADER_POW_PARALLEL_THRESHOLD{8};
-
-CCheckQueue<CHeaderPoWCheck>& GetHeaderPoWCheckQueue()
+//! Queue used to verify header PoW across several worker threads at once.
+//! Not exposed outside this file: callers use HasValidProofOfWork(), and
+//! tests that need a queue build their own local CCheckQueue<CHeaderPoWCheck>
+//! instead of reaching into this singleton.
+static CCheckQueue<CHeaderPoWCheck>& GetHeaderPoWCheckQueue()
 {
     // Constructed once, lazily, on first use, and lives for the rest of
     // the process. Initialization of function-local statics is
@@ -4201,13 +4167,12 @@ CCheckQueue<CHeaderPoWCheck>& GetHeaderPoWCheckQueue()
     static CCheckQueue<CHeaderPoWCheck> queue{/*batch_size=*/64, total_participants - 1};
     return queue;
 }
-} // namespace
 
 bool HasValidProofOfWork(std::span<const CBlockHeader> headers, const Consensus::Params& consensusParams)
 {
-    // [Dpowcoin] Below the parallel-dispatch threshold, checked sequentially
-    // through the same CheckProofOfWorkCached() choke point CHeaderPoWCheck
-    // uses -- so this path stays behaviorally identical to the queued one.
+    // Below the parallel-dispatch threshold, checked sequentially through
+    // the same CheckProofOfWorkCached() choke point CHeaderPoWCheck uses --
+    // so this path stays behaviorally identical to the queued one.
     if (headers.size() < HEADER_POW_PARALLEL_THRESHOLD) {
         return std::ranges::all_of(headers, [&](const auto& header) {
             return CheckProofOfWorkCached(header, consensusParams);
