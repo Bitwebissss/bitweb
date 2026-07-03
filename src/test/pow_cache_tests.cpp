@@ -10,7 +10,6 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include <shared_mutex>
 #include <thread>
 #include <vector>
 

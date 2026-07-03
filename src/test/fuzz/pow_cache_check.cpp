@@ -46,7 +46,8 @@
 // fabricating a pass (critical consensus bug).
 void initialize_pow_cache_check()
 {
-    SelectParams(ChainType::MAIN);
+    // REGTEST
+    SelectParams(ChainType::REGTEST);
 }
 
 FUZZ_TARGET(pow_cache_check, .init = initialize_pow_cache_check)

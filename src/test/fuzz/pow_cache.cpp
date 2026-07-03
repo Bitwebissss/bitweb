@@ -6,6 +6,7 @@
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
+#include <test/util/random.h>
 #include <uint256.h>
 #include <util/hasher.h>
 
@@ -30,6 +31,7 @@
 // is never acceptable and would indicate a real bug in HeaderPoWCache.
 FUZZ_TARGET(pow_cache)
 {
+    SeedRandomStateForTest(SeedRand::ZEROS);
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
 
     const size_t megabytes = fuzzed_data_provider.ConsumeIntegralInRange<size_t>(0, 16);
@@ -49,7 +51,7 @@ FUZZ_TARGET(pow_cache)
         case 1: {
             const uint256 key = ConsumeUInt256(fuzzed_data_provider);
             const bool hit = cache.Get(key);
-            if (shadow_inserted.count(key) == 0) {
+            if (!shadow_inserted.contains(key)) {
                 // Never Set() since the last Reset(): a hit here would be
                 // a false positive, which must never happen.
                 assert(!hit);
