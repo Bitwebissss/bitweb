@@ -10,6 +10,7 @@
 #include <uint256.h>
 #include <util/hasher.h>
 
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 
@@ -59,13 +60,18 @@ class HeaderPoWCache
 {
 private:
     typedef CuckooCache::cache<uint256, SignatureCacheHasher> map_type;
-    mutable map_type m_cache;
+    // Held by pointer, not by value, so Reset() can swap in a brand new
+    // map_type instead of calling setup_bytes() a second time on the same
+    // one -- CuckooCache::cache::setup()/setup_bytes() are documented as
+    // "should only be called once" per instance (see cuckoocache.h).
+    mutable std::unique_ptr<map_type> m_cache;
     mutable std::shared_mutex m_mutex;
 
 public:
     explicit HeaderPoWCache(size_t max_size_bytes = DEFAULT_HEADER_POW_CACHE_BYTES)
+        : m_cache{std::make_unique<map_type>()}
     {
-        m_cache.setup_bytes(max_size_bytes);
+        m_cache->setup_bytes(max_size_bytes);
     }
 
     HeaderPoWCache(const HeaderPoWCache&) = delete;
@@ -74,13 +80,29 @@ public:
     bool Get(const uint256& hash) const
     {
         std::shared_lock<std::shared_mutex> lock(m_mutex);
-        return m_cache.contains(hash, /*erase=*/false);
+        return m_cache->contains(hash, /*erase=*/false);
     }
 
     void Set(const uint256& hash)
     {
         std::unique_lock<std::shared_mutex> lock(m_mutex);
-        m_cache.insert(hash);
+        m_cache->insert(hash);
+    }
+
+    //! Discard all cached entries and rebuild at max_size_bytes. Safe to
+    //! call at any time -- before, after, or interleaved with Get()/Set()
+    //! calls from other threads -- because it's synchronized via the same
+    //! m_mutex those use, and because it swaps the internal map_type
+    //! rather than reusing one (see m_cache's comment above). The object
+    //! itself (this HeaderPoWCache, and thus GetHeaderPoWCache()'s
+    //! returned reference) never moves or gets destroyed, so no caller can
+    //! ever be left holding a dangling reference across a Reset() call.
+    void Reset(size_t max_size_bytes)
+    {
+        auto fresh = std::make_unique<map_type>();
+        fresh->setup_bytes(max_size_bytes);
+        std::unique_lock<std::shared_mutex> lock(m_mutex);
+        m_cache = std::move(fresh);
     }
 };
 
@@ -88,42 +110,39 @@ public:
  * Process-lifetime shared instance used by CheckProofOfWorkCached(). Every
  * caller (validation.cpp's CheckBlockHeader()/CHeaderPoWCheck,
  * node/blockstorage.cpp's ReadBlock(), and any future caller) shares this
- * one cache. Defaults to DEFAULT_HEADER_POW_CACHE_BYTES (~2.1M headers,
- * 64 MiB at sizeof(uint256)=32 bytes/entry) unless InitHeaderPoWCache() was
- * called earlier in this process with a different size -- see
- * InitHeaderPoWCache() below for the sizing rationale and override
- * mechanism.
+ * one cache. Starts out at DEFAULT_HEADER_POW_CACHE_BYTES and can be
+ * resized at any time via InitHeaderPoWCache() -- see that function below.
  *
- * Lazily constructed on first call (function-local static, thread-safe
- * init since C++11). Because of this, the size actually used is whatever
- * InitHeaderPoWCache() (if any) set *before* this function's first call
- * anywhere in the process -- any InitHeaderPoWCache() call after that
- * point cannot resize an already-constructed cache (see the assert
- * there).
+ * The HeaderPoWCache object itself is a function-local static (thread-safe
+ * init since C++11) and never gets destroyed or replaced -- only its
+ * internal contents are ever swapped, via HeaderPoWCache::Reset(). So the
+ * reference this returns stays valid for the rest of the process no matter
+ * how many times InitHeaderPoWCache() is called.
  */
 HeaderPoWCache& GetHeaderPoWCache();
 
 /**
- * Set the size (bytes) that GetHeaderPoWCache()'s process-lifetime cache
- * will be constructed with. Optional: if this is never called, the cache
- * simply uses DEFAULT_HEADER_POW_CACHE_BYTES, which is always the case
- * for a bare libbitcoinkernel consumer that has no ArgsManager/config
- * layer to call this from in the first place (e.g. bitcoin-chainstate) --
- * this function exists purely so an app-level layer that *does* have one
- * (bitwebd's -headerpowcachesize=<MiB>, wired up in
- * node/chainstatemanager_args.cpp) can override the default before the
- * cache is first touched. pow_cache.cpp/pow.cpp are compiled directly
- * into libbitcoinkernel and never call into ArgsManager themselves -- see
- * the app-layer wiring in node/chainstatemanager_args.cpp and init.cpp
- * for how the value gets here without the kernel depending on gArgs.
+ * (Re)size GetHeaderPoWCache()'s process-lifetime cache to max_size_bytes,
+ * discarding whatever it currently holds. Optional: if this is never
+ * called, the cache simply stays at DEFAULT_HEADER_POW_CACHE_BYTES, which
+ * is always the case for a bare libbitcoinkernel consumer that has no
+ * ArgsManager/config layer to call this from in the first place (e.g.
+ * bitcoin-chainstate) -- this function exists purely so an app-level layer
+ * that *does* have one (bitwebd's -headerpowcachesize=<MiB>, wired up in
+ * node/chainstatemanager_args.cpp) can override the default. pow_cache.cpp
+ * is compiled directly into libbitcoinkernel and never calls into
+ * ArgsManager itself -- see the app-layer wiring in
+ * node/chainstatemanager_args.cpp and init.cpp for how the value gets here
+ * without the kernel depending on gArgs.
  *
- * Must be called, if at all, strictly before the first call to
- * GetHeaderPoWCache() (directly, or indirectly via
- * CheckProofOfWorkCached()) anywhere in the process -- asserts otherwise,
- * since a silent no-op there would be a confusing, hard-to-notice bug
- * rather than a loud one. Not thread-safe against concurrent
- * GetHeaderPoWCache() calls; the intended caller is single-threaded
- * process startup code, before any header/block processing begins.
+ * Safe to call at any time, any number of times, including after the
+ * cache has already been in active use -- it's just HeaderPoWCache::Reset()
+ * under the hood, synchronized against concurrent Get()/Set() via the same
+ * mutex those use. A call simply means "every entry cached so far is gone,
+ * and the cache is now max_size_bytes large going forward"; it never
+ * weakens validation (a cache miss always falls back to a full recompute,
+ * same as an empty cache), it just gives up whatever speedup earlier
+ * cached entries were providing.
  */
 void InitHeaderPoWCache(size_t max_size_bytes);
 
