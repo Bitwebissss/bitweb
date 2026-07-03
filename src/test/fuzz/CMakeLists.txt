@@ -94,6 +94,7 @@ add_executable(fuzz
   permitted_difficulty.cpp # Bitweb Params: fuzz permitted difficulty
   pow_argon2id.cpp # Bitweb Params: fuzz Argon2id PoW hash
   pow_cache.cpp # Bitweb Params: fuzz HeaderPoWCache
+  pow_cache_check.cpp # Bitweb Params: fuzz CheckProofOfWorkCached
   prevector.cpp
   primitives_transaction.cpp
   process_message.cpp
