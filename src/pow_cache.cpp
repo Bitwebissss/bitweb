@@ -44,14 +44,10 @@ HeaderPoWCache& GetHeaderPoWCache()
     // 64 MiB -- see pow_cache.h for the full sizing rationale) or was
     // overridden by an earlier InitHeaderPoWCache() call from app-level
     // startup code (bitwebd's -headerpowcachesize=<MiB>; see
-    // node/chainstatemanager_args.cpp and init.cpp). Either way, by the
-    // time this static initializes, the value is final for the rest of the
-    // process.
-    //
-    // The lambda's g_header_pow_cache_constructed store runs exactly once,
-    // as part of this same one-time initialization (not on every call) --
-    // it just marks "the cache has now been constructed", for
-    // InitHeaderPoWCache()'s assert to check.
+    // node/chainstatemanager_args.cpp and init.cpp).
+    // The lambda runs once, as part of this same initialization, and
+    // marks g_header_pow_cache_constructed so InitHeaderPoWCache()'s
+    // assert can detect a too-late call.
     static HeaderPoWCache cache{[] {
         g_header_pow_cache_constructed.store(true, std::memory_order_relaxed);
         return g_header_pow_cache_bytes.load(std::memory_order_relaxed);
