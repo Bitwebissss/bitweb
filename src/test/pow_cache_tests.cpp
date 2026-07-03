@@ -231,7 +231,7 @@ BOOST_AUTO_TEST_CASE(pow_cache_concurrent_get_set)
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
     for (int t = 0; t < num_threads; ++t) {
-        threads.emplace_back([&cache, t] {
+        threads.emplace_back([&cache] {
             FastRandomContext rng{true};
             for (int i = 0; i < ops_per_thread; ++i) {
                 const uint256 key = rng.rand256();
@@ -276,7 +276,7 @@ BOOST_AUTO_TEST_CASE(pow_cache_reset_interleaved_with_get_set)
     // Worker threads doing ordinary Get()/Set() traffic concurrently with
     // the resets above.
     for (int t = 0; t < num_worker_threads; ++t) {
-        threads.emplace_back([&cache, t] {
+        threads.emplace_back([&cache] {
             FastRandomContext rng{true};
             std::vector<uint256> local_keys;
             local_keys.reserve(ops_per_thread);
