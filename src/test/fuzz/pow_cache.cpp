@@ -51,9 +51,21 @@ FUZZ_TARGET(pow_cache)
         case 1: {
             const uint256 key = ConsumeUInt256(fuzzed_data_provider);
             const bool hit = cache.Get(key);
-            if (!shadow_inserted.contains(key)) {
+            if (!shadow_inserted.contains(key) && key != uint256{}) {
                 // Never Set() since the last Reset(): a hit here would be
-                // a false positive, which must never happen.
+                // a false positive, which must never happen -- except for
+                // the all-zero key. CuckooCache::cache's table is
+                // value-initialized on setup()/Reset(), so every not-yet-
+                // occupied slot already holds a default-constructed
+                // Element, i.e. uint256{} (see base_blob's constexpr
+                // default constructor in uint256.h). contains() has no
+                // separate "empty" sentinel distinct from that value, so
+                // querying uint256{} can legitimately match an untouched
+                // slot even though it was never Set(). This is a property
+                // of CuckooCache itself (also why cuckoocache.cpp's own
+                // fuzz target makes no such never-a-hit-before-insert
+                // assertion), not something HeaderPoWCache can special-case
+                // away without its own is-empty tracking.
                 assert(!hit);
             }
             // If the key *was* Set(), a miss is a legitimate eviction --
