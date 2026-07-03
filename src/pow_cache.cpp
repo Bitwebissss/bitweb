@@ -47,8 +47,15 @@ HeaderPoWCache& GetHeaderPoWCache()
     // node/chainstatemanager_args.cpp and init.cpp). Either way, by the
     // time this static initializes, the value is final for the rest of the
     // process.
-    static HeaderPoWCache cache{g_header_pow_cache_bytes.load(std::memory_order_relaxed)};
-    g_header_pow_cache_constructed.store(true, std::memory_order_relaxed);
+    //
+    // The lambda's g_header_pow_cache_constructed store runs exactly once,
+    // as part of this same one-time initialization (not on every call) --
+    // it just marks "the cache has now been constructed", for
+    // InitHeaderPoWCache()'s assert to check.
+    static HeaderPoWCache cache{[] {
+        g_header_pow_cache_constructed.store(true, std::memory_order_relaxed);
+        return g_header_pow_cache_bytes.load(std::memory_order_relaxed);
+    }()};
     return cache;
 }
 
