@@ -15,6 +15,23 @@
 
 class CBlockHeader;
 
+//! Default maximum size of the header proof-of-work verification cache
+//! (HeaderPoWCache / GetHeaderPoWCache()), in bytes. 64 MiB == 2,097,152
+//! entries at sizeof(uint256)=32 bytes/entry -- see pow_cache.cpp
+//! (GetHeaderPoWCache()) for the full sizing rationale. Not required to be
+//! a power of two: CuckooCache::setup_bytes()/setup() size their backing
+//! vector to exactly the requested element count and index into it via
+//! FastRange32 (see cuckoocache.h's compute_hashes() comment), not a
+//! bitmask, specifically so an arbitrary size works -- 64 MiB is chosen
+//! here purely because it divides evenly into a round entry count, not
+//! because a non-power-of-two byte count would misbehave.
+//! Overridable at runtime via -headerpowcachesize=<MiB> (see
+//! InitHeaderPoWCache() below and node/chainstatemanager_args.cpp); this
+//! constant is only the compiled-in fallback used when nothing overrides
+//! it (e.g. a bare libbitcoinkernel consumer with no ArgsManager, such as
+//! bitcoin-chainstate).
+static constexpr size_t DEFAULT_HEADER_POW_CACHE_BYTES{64 << 20}; // 64 MiB
+
 /**
  * [Bitweb] Positive-only result cache used by CheckProofOfWorkCached()
  * (pow.h/pow.cpp) to avoid redundant Argon2id recomputation for a header
@@ -46,7 +63,7 @@ private:
     mutable std::shared_mutex m_mutex;
 
 public:
-    explicit HeaderPoWCache(size_t max_size_bytes = 1 << 26) // default: 64 MiB == 2,097,152 entries
+    explicit HeaderPoWCache(size_t max_size_bytes = DEFAULT_HEADER_POW_CACHE_BYTES)
     {
         m_cache.setup_bytes(max_size_bytes);
     }
@@ -71,11 +88,44 @@ public:
  * Process-lifetime shared instance used by CheckProofOfWorkCached(). Every
  * caller (validation.cpp's CheckBlockHeader()/CHeaderPoWCheck,
  * node/blockstorage.cpp's ReadBlock(), and any future caller) shares this
- * one cache. Sized for ~2.1M headers (2^21 entries, 64 MiB at
- * sizeof(uint256)=32 bytes/entry) -- see pow.cpp for the full sizing
- * rationale.
+ * one cache. Defaults to DEFAULT_HEADER_POW_CACHE_BYTES (~2.1M headers,
+ * 64 MiB at sizeof(uint256)=32 bytes/entry) unless InitHeaderPoWCache() was
+ * called earlier in this process with a different size -- see
+ * InitHeaderPoWCache() below for the sizing rationale and override
+ * mechanism.
+ *
+ * Lazily constructed on first call (function-local static, thread-safe
+ * init since C++11). Because of this, the size actually used is whatever
+ * InitHeaderPoWCache() (if any) set *before* this function's first call
+ * anywhere in the process -- any InitHeaderPoWCache() call after that
+ * point cannot resize an already-constructed cache (see the assert
+ * there).
  */
 HeaderPoWCache& GetHeaderPoWCache();
+
+/**
+ * Set the size (bytes) that GetHeaderPoWCache()'s process-lifetime cache
+ * will be constructed with. Optional: if this is never called, the cache
+ * simply uses DEFAULT_HEADER_POW_CACHE_BYTES, which is always the case
+ * for a bare libbitcoinkernel consumer that has no ArgsManager/config
+ * layer to call this from in the first place (e.g. bitcoin-chainstate) --
+ * this function exists purely so an app-level layer that *does* have one
+ * (bitwebd's -headerpowcachesize=<MiB>, wired up in
+ * node/chainstatemanager_args.cpp) can override the default before the
+ * cache is first touched. pow_cache.cpp/pow.cpp are compiled directly
+ * into libbitcoinkernel and never call into ArgsManager themselves -- see
+ * the app-layer wiring in node/chainstatemanager_args.cpp and init.cpp
+ * for how the value gets here without the kernel depending on gArgs.
+ *
+ * Must be called, if at all, strictly before the first call to
+ * GetHeaderPoWCache() (directly, or indirectly via
+ * CheckProofOfWorkCached()) anywhere in the process -- asserts otherwise,
+ * since a silent no-op there would be a confusing, hard-to-notice bug
+ * rather than a loud one. Not thread-safe against concurrent
+ * GetHeaderPoWCache() calls; the intended caller is single-threaded
+ * process startup code, before any header/block processing begins.
+ */
+void InitHeaderPoWCache(size_t max_size_bytes);
 
 /**
  * [Bitweb] Cached variant of CheckProofOfWork() (pow.h) for a full header

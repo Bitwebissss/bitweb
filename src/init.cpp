@@ -63,6 +63,7 @@
 #include <policy/fees/block_policy_estimator_args.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
+#include <pow_cache.h> // [Bitweb] InitHeaderPoWCache()
 #include <protocol.h>
 #include <rpc/blockchain.h>
 #include <rpc/register.h>
@@ -504,6 +505,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-datadir=<dir>", "Specify data directory", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbbatchsize", strprintf("Maximum database write batch size in bytes (default: %u)", DEFAULT_DB_CACHE_BATCH), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbcache=<n>", strprintf("Maximum database cache size <n> MiB (minimum %d, default: %d). Make sure you have enough RAM. In addition, unused memory allocated to the mempool is shared with this cache (see -maxmempool).", MIN_DB_CACHE >> 20, node::GetDefaultDBCache() >> 20), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-headerpowcachesize=<n>", strprintf("Maximum size of the header proof-of-work (Argon2id) verification cache in MiB. Determines how much already-verified header PoW work survives a headers-sync restart with a peer before needing to be recomputed (default: %u)", DEFAULT_HEADER_POW_CACHE_BYTES >> 20), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS); // [Bitweb]
     argsman.AddArg("-includeconf=<file>", "Specify additional configuration file, relative to the -datadir path (only useable from configuration file, not command line)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-allowignoredconf", strprintf("For backwards compatibility, treat an unused %s file in the datadir as a warning, not an error.", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-loadblock=<file>", "Imports blocks from external file on startup", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -1334,6 +1336,13 @@ static ChainstateLoadResult InitAndLoadChainstate(
         .signals = node.validation_signals.get(),
     };
     Assert(ApplyArgsManOptions(args, chainman_opts)); // no error can happen, already checked in AppInitParameterInteraction
+
+    // [Bitweb] Must run before anything can call GetHeaderPoWCache() --
+    // i.e. before ChainstateManager is constructed below, since that's
+    // what starts headers/block processing. See InitHeaderPoWCache()'s
+    // doc comment in pow_cache.h for why this can't just be done lazily
+    // inside pow_cache.cpp itself (it has no ArgsManager access there).
+    InitHeaderPoWCache(chainman_opts.header_pow_cache_bytes);
 
     BlockManager::Options blockman_opts{
         .chainparams = chainman_opts.chainparams,
