@@ -1844,14 +1844,22 @@ std::optional<std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const CBl
 {
     if (m_chainman.m_blockman.LoadingBlocks()) return "Loading blocks ...";
 
+    // BACKPORT (upstream bitcoin/bitcoin PR #35498, commit 359680b74d; not yet in 31.x as of 2026-07-04):
+    // The lock must be taken here before fetching Peer so another thread does
+    // not delete the CNodeState from under the current thread, causing an
+    // assertion failure in BlockRequested. This lock can be replaced with a
+    // net-specific lock when more of CNodeState is moved into Peer.
+    // DO NOT DROP ON NEXT UPSTREAM MERGE/REBASE: fixes a real, remotely
+    // triggerable assert-crash reachable via RPC (getblockfrompeer) racing
+    // against peer disconnect on the net thread.
+    LOCK(cs_main);
+
     // Ensure this peer exists and hasn't been disconnected
     PeerRef peer = GetPeerRef(peer_id);
     if (peer == nullptr) return "Peer does not exist";
 
     // Ignore pre-segwit peers
     if (!CanServeWitnesses(*peer)) return "Pre-SegWit peer";
-
-    LOCK(cs_main);
 
     // Forget about all prior requests
     RemoveBlockRequest(block_index.GetBlockHash(), std::nullopt);
@@ -2883,31 +2891,6 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
         // So just check whether we still have headers that we need to process,
         // or not.
         if (headers.empty()) {
-            // Bitweb Params
-            // Bitweb uses Argon2id as the PoW algorithm. Unlike SHA-256,
-            // Argon2id validation is CPU and memory intensive 7980xe (~700 hashes per core/sec),
-            // which means headers verification takes significantly longer per batch.
-            // As the chain grows, the PRESYNC phase spans more and more batches,
-            // and the original one-shot timeout (set once at sync start) becomes
-            // inadequate - it expires long before PRESYNC+REDOWNLOAD can complete
-            // on an honest peer.
-            //
-            // Tuning the global timeout is not a solution: a value large enough
-            // for today's chain length will be too small tomorrow as more blocks
-            // are mined, requiring constant manual adjustment.
-            //
-            // The correct fix is a sliding window: reset the timeout after each
-            // successfully received batch. If a peer stops responding for more
-            // than HEADERS_RESPONSE_TIME (4 min), it gets disconnected. A peer
-            // that keeps sending valid batches will never be disconnected
-            // prematurely, regardless of chain length.
-            //
-            // This path is only active during initial sync (IBD). After sync
-            // completes, m_headers_sync_timeout is set to max() and this entire
-            // mechanism is disabled.
-            if (peer.m_headers_sync_timeout != std::chrono::microseconds::max()) {
-                peer.m_headers_sync_timeout = GetTime<std::chrono::microseconds>() + HEADERS_RESPONSE_TIME;
-            }
             return;
         }
 
@@ -2984,17 +2967,6 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
     if (processed && received_new_header) {
         LogBlockHeader(*pindexLast, pfrom, /*via_compact_block=*/false);
-    }
-
-    // Bitweb Params
-    // Bitweb patch for Argon2id extend the timeout after each successfully validated
-    // batch during REDOWNLOAD phase and normal IBD headers sync. Headers reaching this
-    // point have already passed CheckHeadersPoW and ProcessNewBlockHeaders,
-    // so the peer has proven it is doing real work. Resetting the deadline
-    // here implements the same sliding-window logic as in the PRESYNC branch
-    // above - the peer gets HEADERS_RESPONSE_TIME to deliver the next batch.
-    if (peer.m_headers_sync_timeout != std::chrono::microseconds::max()) {
-        peer.m_headers_sync_timeout = GetTime<std::chrono::microseconds>() + HEADERS_RESPONSE_TIME;
     }
 
     // Consider fetching more headers if we are not using our headers-sync mechanism.

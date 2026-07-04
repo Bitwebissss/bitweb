@@ -307,8 +307,15 @@ class PruneTest(BitcoinTestFramework):
         self.nodes[2].getblock(self.nodes[2].getblockhash(self.forkheight))
 
         first_reorg_height = self.nodes[2].getblockcount()
-        curchainhash = self.nodes[2].getblockhash(self.mainchainheight)
-        self.nodes[2].invalidateblock(curchainhash)
+        # BACKPORT (upstream bitcoin/bitcoin PR #35070; not yet in 31.x as of 2026-07-04):
+        # invalidate the block at height 1295 (not the mainchain tip) so this test actually
+        # exercises the m_blocks_unlinked duplicate-entry path fixed by AddUnlinkedBlock()
+        # in node/blockstorage.cpp and validation.cpp. Without that fix, this reliably fails
+        # an invariant assert in CheckBlockIndex() when run with -checkblockindex.
+        # DO NOT DROP ON NEXT UPSTREAM MERGE/REBASE, and do not revert this back to
+        # invalidating self.mainchainheight -- that reverts test coverage for the fix above.
+        block_hash_1295 = self.nodes[2].getblockhash(1295)
+        self.nodes[2].invalidateblock(block_hash_1295)
         goalbestheight = self.mainchainheight
         goalbesthash = self.mainchainhash2
 
@@ -323,7 +330,7 @@ class PruneTest(BitcoinTestFramework):
         if self.nodes[2].getblockcount() < self.mainchainheight:
             blocks_to_mine = first_reorg_height + 1 - self.mainchainheight
             self.log.info(f"Rewind node 0 to prev main chain to mine longer chain to trigger redownload. Blocks needed: {blocks_to_mine}")
-            self.nodes[0].invalidateblock(curchainhash)
+            self.nodes[0].invalidateblock(block_hash_1295)
             assert_equal(self.nodes[0].getblockcount(), self.mainchainheight)
             assert_equal(self.nodes[0].getbestblockhash(), self.mainchainhash2)
             # FIX: node 0's tip timestamp >> real time; set mocktime on node 0 (to generate)
