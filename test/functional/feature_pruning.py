@@ -6,7 +6,6 @@
 
 WARNING:
 This test uses 4GB of disk space.
-This test takes 30 mins or more (up to 2 hours)
 """
 import os
 
@@ -507,9 +506,15 @@ class PruneTest(BitcoinTestFramework):
         # Use restart_node_mocktime to pass -mocktime at startup, cleared immediately.
         self.restart_node_mocktime(2, extra_args=["-prune=550"])
 
-        wallet_info = self.nodes[2].getwalletinfo()
-        self.wait_until(lambda: wallet_info["scanning"] == False)
-        self.wait_until(lambda: wallet_info["lastprocessedblock"]["height"] == self.nodes[2].getblockcount())
+        # BACKPORT (upstream bitcoin/bitcoin PR #35070, commit 0852925bd8d4; not yet in 31.x
+        # as of 2026-07-05): re-fetch getwalletinfo() inside each wait_until predicate instead
+        # of checking a snapshot captured once beforehand. The old `wallet_info = ...` pattern
+        # froze the dict at call time, so the lambda kept re-checking the same stale values
+        # forever -- passing trivially if scanning was already False at capture time, or
+        # hanging until timeout if it was True, regardless of the wallet's real progress.
+        # DO NOT DROP ON NEXT UPSTREAM MERGE/REBASE.
+        self.wait_until(lambda: self.nodes[2].getwalletinfo()["scanning"] == False)
+        self.wait_until(lambda: self.nodes[2].getwalletinfo()["lastprocessedblock"]["height"] == self.nodes[2].getblockcount())
 
         # check that wallet loads successfully when restarting a pruned node after IBD.
         # this was reported to fail in #7494.
@@ -517,9 +522,8 @@ class PruneTest(BitcoinTestFramework):
         # (tip timestamps >> real clock); cleared via setmocktime(0) right after.
         self.restart_node_mocktime(5, extra_args=["-prune=550", "-blockfilterindex=1"])
 
-        wallet_info = self.nodes[5].getwalletinfo()
-        self.wait_until(lambda: wallet_info["scanning"] == False)
-        self.wait_until(lambda: wallet_info["lastprocessedblock"]["height"] == self.nodes[0].getblockcount())
+        self.wait_until(lambda: self.nodes[5].getwalletinfo()["scanning"] == False)
+        self.wait_until(lambda: self.nodes[5].getwalletinfo()["lastprocessedblock"]["height"] == self.nodes[0].getblockcount())
 
     def run_test(self):
         self.log.info("Warning! This test requires 4GB of disk space")
