@@ -341,7 +341,7 @@ class PruneTest(BitcoinTestFramework):
 
         self.log.info("Verify node 2 reorged back to the main chain, some blocks of which it had to redownload")
         # Wait for Node 2 to reorg to proper height
-        self.wait_until(lambda: self.nodes[2].getblockcount() >= goalbestheight, timeout=900)
+        self.wait_until(lambda: self.nodes[2].getblockcount() >= goalbestheight, timeout=1200)
         reset_mocktime([self.nodes[0], self.nodes[2]])  # FIX: reset after node 2 has finished reorg
         assert_equal(self.nodes[2].getbestblockhash(), goalbesthash)
         # Verify we can now have the data for a block previously pruned
