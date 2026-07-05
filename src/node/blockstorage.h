@@ -294,7 +294,6 @@ public:
 
     /**
      * All pairs A->B, where A (or one of its ancestors) misses transactions, but B has transactions.
-     * Pruned nodes may have entries where B is missing data.
      */
     std::multimap<CBlockIndex*, CBlockIndex*> m_blocks_unlinked;
     // BACKPORT (upstream bitcoin/bitcoin PR #35070, commits c787b3b99b/d6359937bf; not yet in 31.x
