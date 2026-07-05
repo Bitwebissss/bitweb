@@ -1339,7 +1339,7 @@ static ChainstateLoadResult InitAndLoadChainstate(
     };
     Assert(ApplyArgsManOptions(args, chainman_opts)); // no error can happen, already checked in AppInitParameterInteraction
 
-    // Bitweb Params 
+    // Bitweb Params
     // Must run before anything can call GetHeaderPoWCache()
     // i.e. before ChainstateManager is constructed below, since that's
     // what starts headers/block processing. See InitHeaderPoWCache()'s
