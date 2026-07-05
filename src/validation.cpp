@@ -37,7 +37,7 @@
 #include <policy/settings.h>
 #include <policy/truc_policy.h>
 #include <pow.h>
-#include <pow_cache.h>
+#include <pow_cache.h> // Bitweb Params
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
@@ -74,7 +74,7 @@
 #include <ranges>
 #include <span>
 #include <string>
-#include <thread>
+#include <thread> // Bitweb Params
 #include <tuple>
 #include <utility>
 
@@ -3935,7 +3935,8 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
     }
 }
 
-// [Bitweb] CheckProofOfWorkCached() -- the HeaderPoWCache-backed choke
+// Bitweb Params
+// CheckProofOfWorkCached() -- the HeaderPoWCache-backed choke
 // point used below by CheckBlockHeader(), CHeaderPoWCheck::operator(), and
 // HasValidProofOfWork()'s small-batch path -- lives in pow_cache.h/.cpp,
 // a standalone module with no knowledge of CBlockHeader beyond a forward
@@ -3949,7 +3950,7 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
 static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
     // Check proof of work matches claimed amount.
-    // [Dpowcoin] Cached via CheckProofOfWorkCached() -- see its doc above.
+    // [Bitweb] Cached via CheckProofOfWorkCached() -- see its doc above.
     if (fCheckPOW && !CheckProofOfWorkCached(block, consensusParams)) {
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "high-hash", "proof of work failed");
     }

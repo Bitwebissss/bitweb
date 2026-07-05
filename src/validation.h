@@ -417,6 +417,7 @@ BlockValidationState TestBlockValidity(
 /** Check that the proof of work on each blockheader matches the value in nBits */
 bool HasValidProofOfWork(std::span<const CBlockHeader> headers, const Consensus::Params& consensusParams);
 
+/* Bitweb Params */
 /**
  * Argon2id proof-of-work check for a single header, meant to be run
  * through CCheckQueue so a batch of headers can be verified across
@@ -455,6 +456,7 @@ constexpr unsigned int MAX_HEADER_POW_CHECK_THREADS{6};
 
 //! Below this many headers, queue dispatch overhead isn't worth it.
 constexpr size_t HEADER_POW_PARALLEL_THRESHOLD{32};
+/* Bitweb Params */
 
 /** Check if a block has been mutated (with respect to its merkle root and witness commitments). */
 bool IsBlockMutated(const CBlock& block, bool check_witness_root);
