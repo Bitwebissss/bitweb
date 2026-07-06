@@ -241,39 +241,71 @@ BOOST_AUTO_TEST_CASE(concurrent_controls_do_not_cross_contaminate)
 }
 
 // ---------------------------------------------------------------------------
-// 5. HasValidProofOfWork()'s sequential/parallel branch at
-//    HEADER_POW_PARALLEL_THRESHOLD is wired correctly on both sides of the
-//    boundary, and well past it -- both for all-valid and for
-//    one-invalid-header input.
+// 5. HasValidProofOfWork()'s sequential branch, strictly below
+//    HEADER_POW_PARALLEL_THRESHOLD: both all-valid and one-invalid-header
+//    input.
 // ---------------------------------------------------------------------------
-BOOST_AUTO_TEST_CASE(has_valid_pow_threshold_boundary)
+BOOST_AUTO_TEST_CASE(has_valid_pow_sequential_path_below_threshold)
 {
     auto& queue{m_node.chainman->GetHeaderCheckQueue()};
-    // Just below the threshold: sequential path.
-    {
-        auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD - 1)};
+
+    auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD - 1)};
+    BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
+    headers.back() = MakeInvalidHeader(999);
+    BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
+}
+
+// ---------------------------------------------------------------------------
+// 6. HasValidProofOfWork() at exactly HEADER_POW_PARALLEL_THRESHOLD -- the
+//    first size that takes the queue path. Both all-valid and
+//    one-invalid-header input.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(has_valid_pow_queue_path_at_threshold)
+{
+    auto& queue{m_node.chainman->GetHeaderCheckQueue()};
+
+    auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD, /*base=*/10000)};
+    BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
+    headers.front() = MakeInvalidHeader(1000);
+    BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
+}
+
+// ---------------------------------------------------------------------------
+// 7. HasValidProofOfWork() comfortably past HEADER_POW_PARALLEL_THRESHOLD,
+//    spanning several queue batches. Both all-valid and
+//    one-invalid-header (injected in the middle) input.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(has_valid_pow_queue_path_above_threshold)
+{
+    auto& queue{m_node.chainman->GetHeaderCheckQueue()};
+
+    auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD + 300, /*base=*/20000)};
+    BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
+    headers[headers.size() / 2] = MakeInvalidHeader(2000);
+    BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
+}
+
+// ---------------------------------------------------------------------------
+// 8. The same ChainstateManager-owned queue must be safe to reuse across
+//    repeated, sequential HasValidProofOfWork() calls, mixing valid and
+//    invalid batches, the way real header-sync batches would arrive from a
+//    single peer over time.
+// ---------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(has_valid_pow_queue_reusable_across_calls)
+{
+    auto& queue{m_node.chainman->GetHeaderCheckQueue()};
+
+    for (int round = 0; round < 5; ++round) {
+        auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD + 10, /*base=*/static_cast<uint32_t>(round * 1000))};
         BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
-        headers.back() = MakeInvalidHeader(999);
-        BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
-    }
-    // Exactly at the threshold: first size to take the queue path.
-    {
-        auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD, /*base=*/10000)};
-        BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
-        headers.front() = MakeInvalidHeader(1000);
-        BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
-    }
-    // Comfortably past the threshold, spanning several queue batches.
-    {
-        auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD + 300, /*base=*/20000)};
-        BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
-        headers[headers.size() / 2] = MakeInvalidHeader(2000);
+
+        headers[5] = MakeInvalidHeader(static_cast<uint32_t>(round));
         BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
     }
 }
 
 // ---------------------------------------------------------------------------
-// 6. Multiple threads call the real HasValidProofOfWork() (and therefore the
+// 9. Multiple threads call the real HasValidProofOfWork() (and therefore the
 //    ChainstateManager-owned m_header_pow_check_queue) concurrently, each
 //    above HEADER_POW_PARALLEL_THRESHOLD to force the queue path. This is
 //    the closest thing to the production call pattern from
