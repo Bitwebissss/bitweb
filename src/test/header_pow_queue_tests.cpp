@@ -20,23 +20,18 @@
 // deterministic true/false result flowing through the queue and through
 // HasValidProofOfWork()'s threshold branch.
 //
-// IMPORTANT: this file deliberately never calls the real HasValidProofOfWork()
-// with headers.size() >= HEADER_POW_PARALLEL_THRESHOLD. That path lazily
-// constructs validation.cpp's file-static GetHeaderPoWCheckQueue() singleton,
-// which by design (see its comment in validation.cpp) is constructed once and
-// lives for the rest of the process -- its worker threads are only ever
-// joined at process exit, not at the end of a test case. In this test binary
-// that is unsafe: util_tests.cpp's test_LockDirectory calls fork() later in
-// the same process, and POSIX fork() only carries the calling thread into the
-// child -- any other thread that happens to be mid-way through a libc/libstdc++
-// lock (malloc arena, iostream, TLS/dlopen, ...) at the instant of fork()
-// leaves that lock permanently "held" in the child, which can hang or corrupt
-// state the next time the child needs it. Every other test in this file (and
-// in checkqueue_tests.cpp) only ever builds short-lived, function-scoped
-// CCheckQueue objects whose worker threads are joined by ~CCheckQueue() before
-// the test case returns, so nothing survives to race with a later fork(). The
-// real singleton is therefore only exercised below the threshold, where
-// HasValidProofOfWork() never touches GetHeaderPoWCheckQueue() at all.
+// HasValidProofOfWork() now takes its CCheckQueue<CHeaderPoWCheck> as a
+// parameter instead of reaching into a file-static singleton -- the queue is
+// owned by ChainstateManager (m_header_pow_check_queue, see validation.h/.cpp),
+// same lifetime discipline as m_script_check_queue. RegTestingSetup's
+// m_node.chainman is a fresh ChainstateManager per test case, and
+// ~ChainTestingSetup() resets it (joining the queue's worker threads via
+// ~CCheckQueue()) before the test case returns -- so, unlike the previous
+// process-lifetime singleton, nothing here can survive to race with
+// util_tests.cpp's test_LockDirectory fork() later in the same process.
+// That's why the >= HEADER_POW_PARALLEL_THRESHOLD tests below are safe to
+// run through the real HasValidProofOfWork(), passing m_node.chainman's
+// queue explicitly.
 
 #include <algorithm>
 #include <arith_uint256.h>
@@ -213,22 +208,48 @@ BOOST_AUTO_TEST_CASE(concurrent_controls_do_not_cross_contaminate)
 }
 
 // ---------------------------------------------------------------------------
-// HasValidProofOfWork()'s sequential branch, exercised through the real
-// public function. Deliberately capped below HEADER_POW_PARALLEL_THRESHOLD:
-// that branch returns via CheckProofOfWorkCached() without ever calling
-// GetHeaderPoWCheckQueue(), so it cannot leak the process-lifetime singleton
-// thread pool described in the file header comment above. Coverage of the
-// >= threshold, queue-backed branch's *mechanics* (batching, loss-free
-// dispatch, failure aggregation, concurrent CCheckQueueControl use) is
-// already exhaustive via local_queue_* and concurrent_controls_* above,
-// against a queue built the same way GetHeaderPoWCheckQueue() builds its own.
+// HasValidProofOfWork()'s public sequential and queue-backed branches,
+// exercised through the real function against m_node.chainman's own
+// ChainstateManager-owned queue (see file header comment above).
 // ---------------------------------------------------------------------------
 BOOST_AUTO_TEST_CASE(has_valid_pow_sequential_path_below_threshold)
 {
+    auto& queue = m_node.chainman->GetHeaderCheckQueue();
     auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD - 1)};
-    BOOST_CHECK(HasValidProofOfWork(headers, m_consensus));
+    BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
     headers.back() = MakeInvalidHeader(999);
-    BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus));
+    BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
+}
+
+BOOST_AUTO_TEST_CASE(has_valid_pow_queue_path_at_and_above_threshold)
+{
+    auto& queue = m_node.chainman->GetHeaderCheckQueue();
+
+    // Exactly at the threshold: dispatched through the queue, all valid.
+    auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD)};
+    BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
+
+    // A large batch, well above the threshold, with an invalid header
+    // somewhere in the middle -- must still be caught via the queue path.
+    auto big_headers{MakeValidHeaders(257, /*base=*/10'000)};
+    big_headers[130] = MakeInvalidHeader(4242);
+    BOOST_CHECK(!HasValidProofOfWork(big_headers, m_consensus, queue));
+}
+
+BOOST_AUTO_TEST_CASE(has_valid_pow_queue_reusable_across_calls)
+{
+    // The same ChainstateManager-owned queue must be safe to reuse across
+    // repeated HasValidProofOfWork() calls, mixing valid and invalid
+    // batches, the way real header-sync batches would.
+    auto& queue = m_node.chainman->GetHeaderCheckQueue();
+
+    for (int round = 0; round < 5; ++round) {
+        auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD + 10, /*base=*/static_cast<uint32_t>(round * 1000))};
+        BOOST_CHECK(HasValidProofOfWork(headers, m_consensus, queue));
+
+        headers[5] = MakeInvalidHeader(static_cast<uint32_t>(round));
+        BOOST_CHECK(!HasValidProofOfWork(headers, m_consensus, queue));
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
