@@ -4229,13 +4229,14 @@ std::optional<bool> CHeaderPoWCheck::operator()() const
     return std::nullopt;
 }
 
-//! Bitweb Params: how many worker threads ChainstateManager should give its
-//! m_header_pow_check_queue -- including the calling (master) thread itself,
-//! which always helps out via CCheckQueueControl::Complete(), same
-//! convention as -par's worker_threads_num. One core is left free for the
-//! rest of the node whenever more than one core is available, so this never
-//! starves the system on small boxes (e.g. a Raspberry Pi). Used only from
-//! ChainstateManager's constructor init list (validation.h/.cpp).
+//! Number of worker threads to hand CCheckQueue<CHeaderPoWCheck> at
+//! construction time. total_participants is how many threads -- including
+//! the calling (master) thread itself, which always helps out via
+//! CCheckQueueControl::Complete(), same convention as -par's
+//! worker_threads_num -- will be hashing concurrently for one batch. One
+//! core is left free for the rest of the node whenever more than one core
+//! is available, so this never starves the system on small boxes (e.g. a
+//! Raspberry Pi).
 static int HeaderPoWCheckQueueWorkerThreads()
 {
     const int cores{static_cast<int>(std::thread::hardware_concurrency())};
@@ -4247,8 +4248,7 @@ bool HasValidProofOfWork(const std::vector<CBlockHeader>& headers, const Consens
 {
     // Below the parallel-dispatch threshold, checked sequentially through
     // the same CheckProofOfWorkCached() choke point CHeaderPoWCheck uses --
-    // so this path stays behaviorally identical to the queued one, and never
-    // touches `queue` at all.
+    // so this path stays behaviorally identical to the queued one.
     if (headers.size() < HEADER_POW_PARALLEL_THRESHOLD) {
         return std::all_of(headers.cbegin(), headers.cend(), [&](const auto& header) {
             return CheckProofOfWorkCached(header, consensusParams);

@@ -449,17 +449,9 @@ constexpr unsigned int MAX_HEADER_POW_CHECK_THREADS{6};
 //! Below this many headers, queue dispatch overhead isn't worth it.
 constexpr size_t HEADER_POW_PARALLEL_THRESHOLD{32};
 
-/**
- * Check that the proof of work on each blockheader matches the value in
- * nBits. Below HEADER_POW_PARALLEL_THRESHOLD headers this runs sequentially
- * and never touches `queue`; at or above it, dispatches CHeaderPoWCheck
- * instances across `queue`'s worker threads via CCheckQueueControl.
- *
- * `queue`'s worker threads are owned and joined by whichever
- * ChainstateManager the caller has (see
- * ChainstateManager::GetHeaderCheckQueue()), the same lifetime discipline
- * as m_script_check_queue.
- */
+//! Check that the proof of work on each block header matches the value in
+//! nBits. Below HEADER_POW_PARALLEL_THRESHOLD headers, checked sequentially;
+//! at or above it, dispatched across queue's worker threads.
 bool HasValidProofOfWork(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, CCheckQueue<CHeaderPoWCheck>& queue);
 /* Bitweb Params */
 
@@ -1030,6 +1022,7 @@ private:
     //! A queue for script verifications that have to be performed by worker threads.
     CCheckQueue<CScriptCheck> m_script_check_queue;
 
+    /* Bitweb Params */
     //! A queue for header PoW verifications that have to be performed by
     //! worker threads. Bitweb Params: constructed in
     //! ChainstateManager::ChainstateManager() and joined by
@@ -1037,6 +1030,7 @@ private:
     //! ChainstateManager that created them -- same lifetime discipline as
     //! m_script_check_queue above.
     CCheckQueue<CHeaderPoWCheck> m_header_pow_check_queue;
+    /* Bitweb Params */
 
     //! Timers and counters used for benchmarking validation in both background
     //! and active chainstates.
@@ -1396,11 +1390,13 @@ public:
 
     CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
 
-    //! Bitweb Params: accessor for the ChainstateManager-owned header PoW
+    /* Bitweb Params */
+    //! accessor for the ChainstateManager-owned header PoW
     //! check queue, used by HasValidProofOfWork() callers
     //! (net_processing.cpp's PeerManagerImpl::CheckHeadersPoW(), and tests
     //! via m_node.chainman).
     CCheckQueue<CHeaderPoWCheck>& GetHeaderCheckQueue() { return m_header_pow_check_queue; }
+    /* Bitweb Params */
 
     ~ChainstateManager();
 };

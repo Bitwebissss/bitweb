@@ -121,11 +121,11 @@ BOOST_FIXTURE_TEST_SUITE(header_pow_queue_tests, HeaderPoWCheckQueueTest)
 // ---------------------------------------------------------------------------
 BOOST_AUTO_TEST_CASE(local_queue_no_losses_all_valid)
 {
-    // Mirrors production's batch_size (see ChainstateManager's
-    // m_header_pow_check_queue member init in validation.cpp); worker count
-    // kept small and fixed, independent of this machine's
-    // hardware_concurrency(), so the test is deterministic about how many
-    // threads are actually racing on the queue.
+    // Mirrors production's batch_size (see m_header_pow_check_queue's
+    // construction in ChainstateManager's constructor, validation.cpp);
+    // worker count kept small and fixed, independent of
+    // this machine's hardware_concurrency(), so the test is deterministic
+    // about how many threads are actually racing on the queue.
     CCheckQueue<CHeaderPoWCheck> queue{/*batch_size=*/64, /*worker_threads_num=*/3};
 
     for (const size_t count : {size_t{0}, size_t{1}, size_t{2}, size_t{31}, size_t{32}, size_t{33}, size_t{64}, size_t{257}}) {
@@ -248,8 +248,7 @@ BOOST_AUTO_TEST_CASE(concurrent_controls_do_not_cross_contaminate)
 // ---------------------------------------------------------------------------
 BOOST_AUTO_TEST_CASE(has_valid_pow_threshold_boundary)
 {
-    auto& queue = m_node.chainman->GetHeaderCheckQueue();
-
+    auto& queue{m_node.chainman->GetHeaderCheckQueue()};
     // Just below the threshold: sequential path.
     {
         auto headers{MakeValidHeaders(HEADER_POW_PARALLEL_THRESHOLD - 1)};
@@ -274,19 +273,19 @@ BOOST_AUTO_TEST_CASE(has_valid_pow_threshold_boundary)
 }
 
 // ---------------------------------------------------------------------------
-// 6. Multiple threads call the real HasValidProofOfWork() concurrently
-//    against the same ChainstateManager-owned queue, each above
-//    HEADER_POW_PARALLEL_THRESHOLD to force the queue path. This is the
-//    closest thing to the production call pattern from net_processing.cpp's
-//    CheckHeadersPoW() under concurrent peers. Verifies no hang, no crash,
-//    and no cross-thread contamination of results.
+// 6. Multiple threads call the real HasValidProofOfWork() (and therefore the
+//    ChainstateManager-owned m_header_pow_check_queue) concurrently, each
+//    above HEADER_POW_PARALLEL_THRESHOLD to force the queue path. This is
+//    the closest thing to the production call pattern from
+//    net_processing.cpp's CheckHeadersPoW() under concurrent peers. Verifies
+//    no hang, no crash, and no cross-thread contamination of results.
 // ---------------------------------------------------------------------------
 BOOST_AUTO_TEST_CASE(has_valid_pow_concurrent_calls_no_cross_contamination)
 {
-    auto& queue = m_node.chainman->GetHeaderCheckQueue();
     constexpr int kThreads = 6;
     const size_t per_thread_count = HEADER_POW_PARALLEL_THRESHOLD + 50;
 
+    auto& queue{m_node.chainman->GetHeaderCheckQueue()};
     std::vector<std::thread> threads;
     std::vector<int> observed(kThreads, -1); // 1 = true (valid), 0 = false (invalid)
     std::vector<int> expected(kThreads, -1);
